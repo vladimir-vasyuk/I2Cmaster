@@ -1,12 +1,11 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
-// Company:  www.circuitden.com
-// Engineer: Artin Isagholian
-//           artinisagholian@gmail.com
-// 
-// Create Date: 01/20/2021 05:47:22 PM
+//
+// Base idea by Artin Isagholian (artinisagholian@gmail.com)
+//
+// Create Date: 21/08/2023
 // Design Name: 
-// Module Name: i2c_master
+// Module Name: i2c_mmaster
 // Project Name: 
 // Target Devices: 
 // Tool Versions: 
@@ -24,42 +23,41 @@ module i2c_mmaster#(
     parameter REGISTER_WIDTH  = 8,
     parameter ADDRESS_WIDTH   = 7
 )(
-    input                        clock_i,
-    input                        reset_i,
-    input                        enable_i,
-    input                        rw_i,
-    input                        ur_i,
-    input [7:0]                  dat_i,
-    input [7:0]                  regadr_i,
-    input [6:0]                  devadr_i,
-    input [15:0]                 datnum_i,
+    input                        clock_i,    // I2C clock
+    input                        reset_i,    // Reset signal (active high)
+    input                        enable_i,   // Enable signal (active high)
+    input                        rw_i,       // Read/Write (1/0)
+    input                        ur_i,       // Use register (active high)
+    input [7:0]                  dat_i,      // Data to send to a slave
+    input [7:0]                  regadr_i,   // Register address value
+    input [6:0]                  devadr_i,   // Device address value
+    input [15:0]                 datnum_i,   // Number of bytes to send (to receive)
 //
-    output  reg [7:0]            dat_o,
-    output  reg                  busy_o,
-    output  reg                  dvalid_o,
+    output  reg [7:0]            dat_o,      // Data received from a slave
+    output  reg                  busy_o,     // Busy signal (active high)
+    output  reg                  dvalid_o,   // Data valid signal (active high)
 //
-    inout                        sda,
-    inout                        scl
+    inout                        sda,        // I2C data line
+    inout                        scl         // I2C clock line
 );
 
 
- /*INSTANTATION TEMPLATE
-i2c_mmaster #(.DATA_WIDTH(8),.REGISTER_WIDTH(8),.ADDRESS_WIDTH(7))
-        i2c_master_inst(
-            .clock_i                (),
-            .reset_i                (),
-            .enable_i               (),
-            .rw_i                   (),
-            .dat_i                  (),
-            .regadr_i               (),
-            .devadr_i               (),
-
-            .dat_o                  (),
-            .busy_o                 (),
-
-            .sda                    (),
-            .scl                    ()
-        );
+/*INSTANTATION TEMPLATE
+i2c_mmaster i2c_master_inst(
+   .clock_i    (),
+   .reset_i    (),
+   .enable_i   (),
+   .rw_i       (),
+   .ur_i       (),
+   .dat_i      (),
+   .regadr_i   (),
+   .devadr_i   (),
+   .dat_o      (),
+   .busy_o     (),
+   .dvalid_o   (),
+   .sda        (),
+   .scl        ()
+);
 */
 
 localparam[3:0] S_IDLE       = 0;
@@ -73,23 +71,22 @@ localparam[3:0] S_SEND_STOP  = 7;
 localparam[3:0] S_WRITE_DATA = 8;
 localparam[3:0] S_SEND_ACK   = 9;
 
-reg [3:0]                  state, next_state;
-reg                        serial_clock;
-reg [7:0]                  saved_devadr;
-reg [7:0]                  saved_regadr;
-reg [15:0]                 saved_datnum;
-reg [7:0]                  saved_i2c_o;
-reg [7:0]                  wrdata;
-reg [1:0]                  process_counter;
-reg [3:0]                  bit_counter;
-reg                        serial_data;
-reg                        next_serial_data;
-reg                        last_ack;
-reg                        saved_rw_i;
-reg                        saved_ur_i;
-reg                        sda_enable;
-reg                        scl_enable;
-reg                        ackval;
+reg [3:0]   state, next_state;
+reg         serial_clock;
+reg [7:0]   saved_devadr;
+reg [7:0]   saved_regadr;
+reg [15:0]  saved_datnum;
+reg [7:0]   saved_i2c_o;
+reg [1:0]   process_counter;
+reg [3:0]   bit_counter;
+reg         serial_data;
+reg         next_serial_data;
+reg         last_ack;
+reg         saved_rw_i;
+reg         saved_ur_i;
+reg         sda_enable;
+reg         scl_enable;
+reg         ackval;
 
 assign scl = (scl_enable) ? serial_clock : 1'bz;
 assign sda = (sda_enable) ? serial_data  : 1'bz;
@@ -111,21 +108,21 @@ end
 
 always @(posedge clock_i) begin
    if (reset_i) begin
-      state                   <=  S_IDLE;
-      next_state              <=  S_IDLE;
-      process_counter         <=  2'h0;
-      bit_counter             <=  4'b0;
-      last_ack                <=  1'b0;
-      dat_o                   <=  0;
-      saved_devadr            <=  0;
-      saved_regadr            <=  0;
-      saved_datnum            <=  0;
-      saved_i2c_o             <=  0;
-      serial_clock            <=  1'b0;
-      serial_data             <=  1'b0;
-      next_serial_data        <=  1'b0;
-      busy_o                  <=  1'b0;
-      dvalid_o                <=  1'b0;
+      state             <= S_IDLE;
+      next_state        <= S_IDLE;
+      process_counter   <= 2'h0;
+      bit_counter       <= 4'b0;
+      last_ack          <= 1'b0;
+      dat_o             <= 8'b0;
+      saved_devadr      <= 8'b0;
+      saved_regadr      <= 8'b0;
+      saved_datnum      <= 16'b0;
+      saved_i2c_o       <= 8'b0;
+      serial_clock      <= 1'b0;
+      serial_data       <= 1'b0;
+      next_serial_data  <= 1'b0;
+      busy_o            <= 1'b0;
+      dvalid_o          <= 1'b0;
    end
    else begin
       case (state)
@@ -230,7 +227,6 @@ always @(posedge clock_i) begin
                      last_ack <= 1'b1;
                   end
                   process_counter <= process_counter + 1'b1;
-//                  next_serial_data <=  saved_i2c_o[7];
                   dvalid_o <= 1'b0;
                end
                3:  begin
@@ -356,8 +352,6 @@ always @(posedge clock_i) begin
                end
                2: begin
                   serial_clock <= 1'b0;
-                  //sample data on this rising edge of scl
-//                  dat_o[bit_counter-1] <= sda;
                   dat_o <= {dat_o[6:0],sda};
                   bit_counter <= bit_counter - 1'b1;
                   process_counter <= process_counter + 1'b1;
@@ -371,13 +365,11 @@ always @(posedge clock_i) begin
                         next_state <= S_READ_DATA;
                         state <= S_SEND_ACK;
                         bit_counter <= 4'd8;
-//                        serial_data <= 1'b0;
                      end
                      else begin
                         next_state <= S_SEND_STOP;
                         ackval <= 1'b1;            // Send NACK
                         state <= S_SEND_ACK;
-//                        serial_data <= 1'b0;
                      end
                   end
                   process_counter <= process_counter + 1'b1;
