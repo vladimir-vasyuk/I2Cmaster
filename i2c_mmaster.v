@@ -1,28 +1,20 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 //
-// Base idea by Artin Isagholian (artinisagholian@gmail.com)
+// Base idea: Artin Isagholian (artinisagholian@gmail.com)
 //
-// Create Date: 21/08/2023
-// Design Name: 
-// Module Name: i2c_mmaster
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
+// Create Date:   21/08/2023
+// Module Name:   i2c_mmaster
+// Realized:      Byte-Write, Page-Write, Random-Read, Current-Address-Read, Sequential-Read
 // 
 // Dependencies: 
 // 
 // Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
+// Revision 1.0 - Read/write operation works
+// Additional Comments: 
 // 
 //////////////////////////////////////////////////////////////////////////////////
-module i2c_mmaster#(
-    parameter DATA_WIDTH      = 8,
-    parameter REGISTER_WIDTH  = 8,
-    parameter ADDRESS_WIDTH   = 7
-)(
+module i2c_mmaster(
     input                        clock_i,    // I2C clock
     input                        reset_i,    // Reset signal (active high)
     input                        enable_i,   // Enable signal (active high)
@@ -35,8 +27,8 @@ module i2c_mmaster#(
 //
     output  reg [7:0]            dat_o,      // Data received from a slave
     output  reg                  busy_o,     // Busy signal (active high)
-    output  reg                  dvalid_o,   // Data valid signal (active high)
-    output  reg                  newdat_o,   // New data request signal (active high)
+    output                       dvalid_o,   // Data valid signal (active high)
+    output                       newdat_o,   // New data request signal (active high)
 //
     inout                        sda,        // I2C data line
     inout                        scl         // I2C clock line
@@ -90,11 +82,13 @@ reg         sda_enable;
 reg         scl_enable;
 reg         ackval;
 
+wire        use_reg = ~saved_rw_i | saved_ur_i;
+wire        last_bit = saved_rw_i & ~use_reg;
+
 assign scl = (scl_enable) ? serial_clock : 1'bz;
 assign sda = (sda_enable) ? serial_data  : 1'bz;
-
-wire use_reg = ~saved_rw_i | saved_ur_i;
-wire last_bit = saved_rw_i & ~use_reg;
+assign newdat_o = (state==S_WRITE_DATA && bit_counter==8'h7 && process_counter==2'h0)? 1'b1 : 1'b0;
+assign dvalid_o = (state==S_SEND_ACK && process_counter==2'h0)? 1'b1 : 1'b0;
 
 always @(*) begin
    if (state!=S_IDLE && state!=S_CHECK_ACK && state!=S_READ_DATA)
@@ -110,7 +104,7 @@ end
 
 always @(posedge clock_i) begin
    if (reset_i) begin
-      state             <= S_IDLE;
+      state <= S_IDLE;
    end
    else begin
       case (state)
@@ -120,8 +114,6 @@ always @(posedge clock_i) begin
             bit_counter     <= 4'b0;
             last_ack        <= 1'b0;
             busy_o          <= 1'b0;
-            dvalid_o        <= 1'b0;
-            newdat_o        <= 1'b0;
             saved_ur_i      <= ur_i;
             saved_regadr    <= regadr_i;
             saved_datnum    <= datnum_i;
@@ -152,6 +144,7 @@ always @(posedge clock_i) begin
                   process_counter <= process_counter + 1'b1;
                   state <= S_WRITE_ADR;
                   serial_data <= saved_devadr[7];
+                  saved_i2c_o <= dat_i;
                end
             endcase
          end
@@ -199,8 +192,8 @@ always @(posedge clock_i) begin
             case (process_counter)
                0: begin
                   serial_clock <= 1'b1;
-                  saved_i2c_o <= dat_i;
-                  newdat_o <= 1'b0;
+                  if(next_state == S_WRITE_DATA)
+                     next_serial_data <= saved_i2c_o[7];
                   process_counter <= process_counter + 1'b1;
                end
                1: begin //check for clock stretching
@@ -213,8 +206,6 @@ always @(posedge clock_i) begin
                   if (sda == 1'b0) begin
                      last_ack <= 1'b1;
                   end
-                  if(next_state == S_WRITE_DATA)
-                     next_serial_data <= saved_i2c_o[7];
                   process_counter <= process_counter + 1'b1;
                end
                3:  begin
@@ -289,7 +280,7 @@ always @(posedge clock_i) begin
                      next_serial_data <= 1'b0;
                      bit_counter <= 4'd8;
                      serial_data <= 1'b0;
-                     newdat_o <= 1'b1;
+                     saved_i2c_o <= dat_i;
                      if(saved_datnum > 1'b1) begin
                         saved_datnum <= saved_datnum - 1'b1;
                         next_state <= S_WRITE_DATA;
@@ -343,12 +334,11 @@ always @(posedge clock_i) begin
                end
                3: begin
                   if(bit_counter == 1'b0) begin
-                     dvalid_o <= 1'b1;
                      bit_counter <= 4'd8;
                      state <= S_SEND_ACK;
                      if(saved_datnum > 1'b1) begin
                         saved_datnum <= saved_datnum - 1'b1;
-                        ackval <= 1'b0;         // Send ACK
+                        ackval <= 1'b0;            // Send ACK
                         next_state <= S_READ_DATA;
                      end
                      else begin
@@ -365,7 +355,6 @@ always @(posedge clock_i) begin
                0: begin
                   serial_clock <= 1'b1;
                   serial_data <= ackval;
-                  dvalid_o <= 1'b0;
                   process_counter <= process_counter + 1'b1;
                end
                1: begin //check for clock stretching
