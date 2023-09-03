@@ -2,19 +2,18 @@
 // Main module for i2c_mmaster testing.
 // Used EP4CE10E22C8 with AT24C08 EEPROM chip (OMDAZZ RZ301)
 //
-// Button 4 - read eeprom 
-// Button 3 - write eeprom 
-// Button 2 - initialize memory block
+// Button 4 - read eeprom (sequential)
+// Button 3 - read eeprom (1 byte, fixed address)
+// Button 2 - write eeprom (sequential)
+// Reset    - initialize memory block
 //
 //////////////////////////////////////////////////////////////////////////////////
 module i2c_test_eprom(
-	input		      clk,
-	input		      reset,
-	input		      startr,
- 	input		      startw,
-   input		      starti,
-   output [7:0]   idout,
-   output [7:0]   odout,
+   input		      clk,
+   input		      reset,
+   input		      startr,
+   input		      startr1,
+   input		      startw,
 	inout		      scl,
 	inout		      sda
 );
@@ -33,16 +32,15 @@ wire        newdat;                 // New data request (write operation)
 
 // Button signals
 wire        start_read;             // Start read operation
+wire        start_read1;            // Start read operation
 wire        start_write;            // Start write operation
 wire        start_init;             // Start init RAM operation
 wire        start_reset;            // Start reset operation
 wire        read_sig;               // Read button pressed
+wire        read1_sig;              // Read button pressed
 wire        write_sig;              // Write button pressed
 wire        init_sig;               // Init button pressed
 wire 			reset_sig;              // Reset button pressed
-
-assign idout = ibout;
-assign odout = obout;
 
 i2cclock i2c_clk(
 	.clk(clk),
@@ -71,17 +69,18 @@ debounce but_write(
    .sigup(start_write)
 );
 
-debounce but_init(
+debounce but_read1(
 	.clk(nclk),
-	.but(starti),
-   .sigup(start_init)
+	.but(startr1),
+	.signal(read1_sig),
+   .sigup(start_read1)
 );
 
 
 enable_sig enam(
    .clk(nclk),
    .reset(reset_sig),
-   .start(read_sig | write_sig),
+   .start(read_sig | read1_sig | write_sig),
    .busy(busy),
    .enable(enable)
 );
@@ -131,13 +130,15 @@ bufram obuf(
 	.q(obout)
 );
 
+
 // Control block
 reg [9:0]   ncountw, ncountr;       // Number of bytes for read/write operations
 reg         op_cycle = 1'b0;
 reg         op_code = 1'b0;
 reg         idle = 1'b0;
 wire [9:0]  regw;
-reg  [2:0]  func = 3'b0, busy_wait = 3'b0;
+reg  [3:0]  func = 4'b0;
+reg  [2:0]  busy_wait = 3'b0;
 reg         op_cycle_stop = 1'b0;
 wire        busy_wait_max = &busy_wait;
 
@@ -146,18 +147,18 @@ assign datnum = (op_cycle)? (op_code? {6'b0,ncountr} : {6'b0,ncountw}) : 16'b1;
 assign dev_adr = {5'b10100,regw[9],regw[8]};
 assign reg_adr = regw[7:0];
 assign rw = op_code;
-assign obwn = func[2] & ~idle & op_cycle;
+assign obwn = func[3] & ~idle & op_cycle;
 
 always @(posedge nclk) begin
    if(start_reset) begin
-      func <= 3'b0;
+      func <= 4'b1000;
    end
    else begin
       if(op_cycle_stop)
-         func <= 3'b0;
+         func <= 4'b0;
       else
          if(|func == 1'b0)
-            func <= {start_init,start_write,start_read};
+            func <= {1'b0,start_write,start_read1,start_read};
    end
 end
 
@@ -176,21 +177,27 @@ always @(posedge nclk) begin
             busy_wait <= 3'b0;
             op_cycle <= 1'b1;
             case(func)
-               3'b010: begin
+               4'b0100: begin
                   op_code <= 1'b0;
                   badrw <= 10'b0;
                   ncountw <= 10'd16;
                end
-               3'b001: begin
+               4'b0001: begin
                   op_code <= 1'b1;
                   badrr <= 10'b0;
                   ncountr <= 10'd16;
                   ur <= 1'b0;
                end
-               3'b100: begin
+               4'b0010: begin
+                  op_code <= 1'b1;
+                  badrr <= 10'b0;
+                  ncountr <= 10'd1;
+                  ur <= 1'b1;
+               end
+               4'b1000: begin
                   badrw <= 10'b0;
                   init_data <= 8'hAA;
-                  ncountw <= 10'd16;
+                  ncountw <= 10'd1023;
                   op_code <= 1'b0;
                   idle <= 1'b0;
                end
@@ -200,7 +207,7 @@ always @(posedge nclk) begin
             if(~busy_wait_max)
                busy_wait <= busy_wait + 1'b1;
             case(func)
-               3'b010: begin
+               4'b0100: begin
                   if(~busy & busy_wait_max) begin
                      op_cycle <= 1'b0;
                      op_cycle_stop <= 1'b1;
@@ -214,7 +221,7 @@ always @(posedge nclk) begin
                      op_cycle_stop <= 1'b1;
                   end
                end
-               3'b001: begin
+               4'b0001: begin
                   if(~busy & busy_wait_max) begin
                      op_cycle <= 1'b0;
                      op_cycle_stop <= 1'b1;
@@ -228,7 +235,21 @@ always @(posedge nclk) begin
                      op_cycle_stop <= 1'b1;
                   end
                end
-               3'b100: begin
+               4'b0010: begin
+                  if(~busy & busy_wait_max) begin
+                     op_cycle <= 1'b0;
+                     op_cycle_stop <= 1'b1;
+                  end
+                  if(dvalid) begin
+                     badrr <= badrr + 1'b1;
+                     ncountr <= ncountr - 1'b1;
+                  end
+                  if(|ncountr == 1'b0) begin
+                     op_cycle <= 1'b0;
+                     op_cycle_stop <= 1'b1;
+                  end
+               end
+               4'b1000: begin
                   if(idle)
                      idle <= ~idle;
                   else begin
