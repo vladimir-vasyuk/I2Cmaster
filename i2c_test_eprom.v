@@ -3,8 +3,9 @@
 // Used EP4CE10E22C8 with AT24C08 EEPROM chip (OMDAZZ RZ301)
 //
 // Button 4 - read eeprom (sequential)
-// Button 3 - read eeprom (1 byte, fixed address)
+// Button 3 - read eeprom (1 byte, random-address-read)
 // Button 2 - write eeprom (sequential)
+// Button 1 - increment number of bytes to read & random address
 // Reset    - initialize memory block
 //
 //////////////////////////////////////////////////////////////////////////////////
@@ -14,6 +15,7 @@ module i2c_test_eprom(
    input		      startr,
    input		      startr1,
    input		      startw,
+   input		      startn,
 	inout		      scl,
 	inout		      sda
 );
@@ -34,12 +36,12 @@ wire        newdat;                 // New data request (write operation)
 wire        start_read;             // Start read operation
 wire        start_read1;            // Start read operation
 wire        start_write;            // Start write operation
-wire        start_init;             // Start init RAM operation
+wire        start_chgn;             // Start change-N operation
 wire        start_reset;            // Start reset operation
 wire        read_sig;               // Read button pressed
 wire        read1_sig;              // Read button pressed
 wire        write_sig;              // Write button pressed
-wire        init_sig;               // Init button pressed
+wire        chgn_sig;               // Change-N button pressed
 wire 			reset_sig;              // Reset button pressed
 
 i2cclock i2c_clk(
@@ -77,6 +79,12 @@ debounce but_read1(
 );
 
 
+debounce but_chgn(
+	.clk(nclk),
+	.but(startn),
+   .sigup(start_chgn)
+);
+
 enable_sig enam(
    .clk(nclk),
    .reset(reset_sig),
@@ -107,6 +115,7 @@ i2c_mmaster i2c_master_my(
 // RAM block
 wire [7:0]	in_data, ibout, obout;  // Data busses
 reg  [9:0]  badrw, badrr;           // Address registers
+reg  [9:0]  badri;                  // Initial address for random-address-read operation
 reg  [7:0]  init_data;              // Initialization data
 wire        ibclk, obclk;           // Clock signals
 wire        ibwn, obwn;             // Write-enable signals
@@ -132,7 +141,8 @@ bufram obuf(
 
 
 // Control block
-reg [9:0]   ncountw, ncountr;       // Number of bytes for read/write operations
+reg [9:0]   ncountw, ncountr;       // Byte counters for read/write operations
+reg [9:0]   nbytes = 10'd1;         // Number of bytes for read operations
 reg         op_cycle = 1'b0;
 reg         op_code = 1'b0;
 reg         idle = 1'b0;
@@ -141,6 +151,7 @@ reg  [3:0]  func = 4'b0;
 reg  [2:0]  busy_wait = 3'b0;
 reg         op_cycle_stop = 1'b0;
 wire        busy_wait_max = &busy_wait;
+wire [9:0]  init_adr = 10'hA0;    // Initial EEPROM address
 
 assign regw = (op_cycle)? (op_code? badrr : badrw) : 10'b1;
 assign datnum = (op_cycle)? (op_code? {6'b0,ncountr} : {6'b0,ncountw}) : 16'b1;
@@ -148,6 +159,21 @@ assign dev_adr = {5'b10100,regw[9],regw[8]};
 assign reg_adr = regw[7:0];
 assign rw = op_code;
 assign obwn = func[3] & ~idle & op_cycle;
+
+always @(posedge nclk) begin
+   if(start_reset) begin
+      nbytes <= 10'd1;
+      badri <= init_adr;
+   end
+   else begin
+      if(start_chgn) begin
+         nbytes <= nbytes + 1'b1;
+         if(nbytes > 10'd15)
+            nbytes <= 10'd1;
+         badri <= badri + 1'b1;
+      end
+   end
+end
 
 always @(posedge nclk) begin
    if(start_reset) begin
@@ -179,23 +205,23 @@ always @(posedge nclk) begin
             case(func)
                4'b0100: begin
                   op_code <= 1'b0;
-                  badrw <= 10'b0;
+                  badrw <= init_adr;
                   ncountw <= 10'd16;
                end
                4'b0001: begin
                   op_code <= 1'b1;
-                  badrr <= 10'b0;
-                  ncountr <= 10'd16;
+                  badrr <= init_adr;
+                  ncountr <= nbytes;
                   ur <= 1'b0;
                end
                4'b0010: begin
                   op_code <= 1'b1;
-                  badrr <= 10'b0;
+                  badrr <= badri;
                   ncountr <= 10'd1;
                   ur <= 1'b1;
                end
                4'b1000: begin
-                  badrw <= 10'b0;
+                  badrw <= init_adr;
                   init_data <= 8'hAA;
                   ncountw <= 10'd1023;
                   op_code <= 1'b0;
