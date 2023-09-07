@@ -11,6 +11,7 @@
 // 
 // Revision:
 // Revision 1.0 - Read/write operation works
+// Revision 1.1 - Corrected Send-Ack operation
 // Additional Comments: 
 // 
 //////////////////////////////////////////////////////////////////////////////////
@@ -80,7 +81,6 @@ reg         saved_rw_i;
 reg         saved_ur_i;
 reg         sda_enable;
 reg         scl_enable;
-reg         ackval;
 
 wire        use_reg = ~saved_rw_i | saved_ur_i;
 wire        last_bit = saved_rw_i & ~use_reg;
@@ -338,12 +338,12 @@ always @(posedge clock_i) begin
                      state <= S_SEND_ACK;
                      if(saved_datnum > 1'b1) begin
                         saved_datnum <= saved_datnum - 1'b1;
-                        ackval <= 1'b0;            // Send ACK
+                        serial_data <= 1'b0;       // Send ACK
                         next_state <= S_READ_DATA;
                      end
                      else begin
                         next_state <= S_SEND_STOP;
-                        ackval <= 1'b1;            // Send NACK
+                        serial_data <= 1'b1;       // Send NACK
                      end
                   end
                   process_counter <= process_counter + 1'b1;
@@ -354,7 +354,6 @@ always @(posedge clock_i) begin
             case (process_counter)
                0: begin
                   serial_clock <= 1'b1;
-                  serial_data <= ackval;
                   process_counter <= process_counter + 1'b1;
                end
                1: begin //check for clock stretching
